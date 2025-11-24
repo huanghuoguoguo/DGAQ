@@ -30,128 +30,97 @@ from core.trainer import TrainerBuilder
 
 
 class ModelFactory:
-    """模型工厂 - 根据配置创建不同类型的模型"""
+    """模型工厂 - 完全配置驱动的动态模型导入
+    
+    设计原则：
+    - 完全符合开闭原则：新增模型无需修改代码
+    - 配置文件驱动：所有模型信息都在配置文件中
+    - 零硬编码：不依赖任何模型注册表
+    """
     
     @staticmethod
-    def create_model(model_name: str, model_params: Dict, dataset_info: Dict):
+    def _import_class(class_path: str):
         """
-        创建模型实例
+        动态导入类
         
         Args:
-            model_name: 模型名称
+            class_path: 类的完整路径，如 'core.model.cnn_model.LightweightCNN'
+            
+        Returns:
+            导入的类
+        """
+        module_path, class_name = class_path.rsplit('.', 1)
+        module = __import__(module_path, fromlist=[class_name])
+        return getattr(module, class_name)
+    
+    @staticmethod
+    def _prepare_common_params(model_params: Dict, dataset_info: Dict) -> Dict:
+        """
+        准备通用参数（vocab_size, max_length, num_classes）
+        
+        Args:
             model_params: 模型参数
             dataset_info: 数据集信息
+            
+        Returns:
+            合并后的参数字典
         """
-        vocab_size = dataset_info['vocab_size']
-        max_length = dataset_info['max_length']
-        num_classes = dataset_info['num_classes']
+        common_params = {
+            'vocab_size': dataset_info['vocab_size'],
+            'max_length': dataset_info['max_length'],
+            'num_classes': dataset_info['num_classes'],
+        }
+        # 合并参数，模型参数优先
+        return {**common_params, **model_params}
+    
+    @classmethod
+    def create_model(cls, model_class_path: str, model_params: Dict, dataset_info: Dict):
+        """
+        动态创建模型实例
         
-        if model_name == 'cnn':
-            from core.model.cnn_model import LightweightCNN
-            return LightweightCNN(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 128),
-                max_length=max_length,
-                num_classes=num_classes,
-                dropout_rate=model_params.get('dropout_rate', 0.5)
+        Args:
+            model_class_path: 模型类的完整路径（必需）
+            model_params: 模型参数
+            dataset_info: 数据集信息
+            
+        Returns:
+            模型实例
+            
+        Example:
+            model = ModelFactory.create_model(
+                model_class_path='core.model.cnn_model.LightweightCNN',
+                model_params={'embedding_dim': 128, 'dropout_rate': 0.5},
+                dataset_info=dataset_info
+            )
+        """
+        # 1. 动态导入模型类
+        try:
+            model_class = cls._import_class(model_class_path)
+        except (ImportError, AttributeError) as e:
+            raise ImportError(
+                f"无法导入模型类: {model_class_path}\n"
+                f"错误: {str(e)}\n"
+                f"请检查:\n"
+                f"  1. 模块路径是否正确\n"
+                f"  2. 类名是否正确\n"
+                f"  3. 模块是否已安装"
             )
         
-        elif model_name == 'transformer':
-            from core.model.transformer_model import LightweightTransformer
-            return LightweightTransformer(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 128),
-                max_length=max_length,
-                num_classes=num_classes,
-                num_heads=model_params.get('num_heads', 4),
-                num_layers=model_params.get('num_layers', 2),
-                dim_feedforward=model_params.get('dim_feedforward', 256),
-                dropout_rate=model_params.get('dropout_rate', 0.3)
-            )
+        # 2. 准备构造参数
+        constructor_params = cls._prepare_common_params(model_params, dataset_info)
         
-        elif model_name == 'mamba':
-            from core.model.mamba1_model import LightweightMamba
-            return LightweightMamba(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 128),
-                max_length=max_length,
-                num_classes=num_classes,
-                num_layers=model_params.get('num_layers', 2),
-                d_state=model_params.get('d_state', 16),
-                d_conv=model_params.get('d_conv', 4),
-                expand=model_params.get('expand', 2),
-                dropout_rate=model_params.get('dropout_rate', 0.3)
+        # 3. 创建模型实例
+        try:
+            model = model_class(**constructor_params)
+            return model
+        except TypeError as e:
+            raise TypeError(
+                f"创建模型失败\n"
+                f"模型类: {model_class_path}\n"
+                f"传入参数: {list(constructor_params.keys())}\n"
+                f"错误: {str(e)}\n\n"
+                f"请检查模型构造函数参数是否匹配"
             )
-        
-        elif model_name == 'mamba2':
-            from core.model.mamba2_model import LightweightMamba2
-            return LightweightMamba2(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 256),  # Mamba2需要更大的embedding_dim
-                max_length=max_length,
-                num_classes=num_classes,
-                num_layers=model_params.get('num_layers', 2),
-                d_state=model_params.get('d_state', 128),
-                d_conv=model_params.get('d_conv', 4),
-                expand=model_params.get('expand', 2),
-                headdim=model_params.get('headdim', 64),
-                dropout_rate=model_params.get('dropout_rate', 0.3)
-            )
-        
-        elif model_name == 'cnn_moe':
-            from core.model.cnn_moe_model import LightweightCNNMoE
-            return LightweightCNNMoE(
-                vocab_size=vocab_size,
-                num_classes=num_classes,
-                num_experts=model_params.get('num_experts', 3),
-                aux_weight=model_params.get('aux_weight', 0.3),
-                balance_weight=model_params.get('balance_weight', 0.01),
-                dropout_rate=model_params.get('dropout_rate', 0.5)
-            )
-        
-        elif model_name == 'transformer_moe':
-            from core.model.transformer_moe_model import LightweightTransformerMoE
-            return LightweightTransformerMoE(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 128),
-                max_length=max_length,
-                num_classes=num_classes,
-                num_heads=model_params.get('num_heads', 4),
-                num_layers=model_params.get('num_layers', 2),
-                num_experts=model_params.get('num_experts', 3),
-                aux_weight=model_params.get('aux_weight', 0.3),
-                balance_weight=model_params.get('balance_weight', 0.01),
-                dropout_rate=model_params.get('dropout_rate', 0.3)
-            )
-        
-        elif model_name == 'mamba_moe':
-            from core.model.mamba1_moe_model import LightweightMambaMoE
-            return LightweightMambaMoE(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 128),
-                max_length=max_length,
-                num_classes=num_classes,
-                num_layers=model_params.get('num_layers', 2),
-                d_state=model_params.get('d_state', 16),
-                num_experts=model_params.get('num_experts', 3),
-                aux_weight=model_params.get('aux_weight', 0.3),
-                balance_weight=model_params.get('balance_weight', 0.01),
-                dropout_rate=model_params.get('dropout_rate', 0.3)
-            )
-        
-        elif model_name == 'tcbam':
-            from core.model.tcbam_model import LightweightTCBAM
-            return LightweightTCBAM(
-                vocab_size=vocab_size,
-                embedding_dim=model_params.get('embedding_dim', 64),
-                num_heads=model_params.get('num_heads', 4),
-                num_classes=num_classes,
-                max_length=max_length,
-                dropout_rate=model_params.get('dropout_rate', 0.3)
-            )
-        
-        else:
-            raise ValueError(f"不支持的模型类型: {model_name}")
 
 
 def train_single_model(model_config: Dict, global_config: Dict, 
@@ -175,6 +144,15 @@ def train_single_model(model_config: Dict, global_config: Dict,
     model_name = model_config['name']
     task_type = global_config['task_type']
     
+    # 获取模型类路径（必需）
+    model_class_path = model_config.get('model_class_path')
+    if not model_class_path:
+        raise ValueError(
+            f"模型 '{model_name}' 缺少 'model_class_path' 配置\n"
+            f"请在配置文件中指定模型类的完整路径\n"
+            f"示例: model_class_path = 'core.model.cnn_model.LightweightCNN'"
+        )
+    
     # 创建日志记录器
     logger = get_training_logger(model_name, task_type)
     logger.info(f"{'='*60}")
@@ -188,8 +166,9 @@ def train_single_model(model_config: Dict, global_config: Dict,
     try:
         # 创建模型
         logger.info("正在创建模型...")
+        logger.info(f"模型类路径: {model_class_path}")
         model = ModelFactory.create_model(
-            model_name=model_name,
+            model_class_path=model_class_path,
             model_params=model_config.get('model_params', {}),
             dataset_info=dataset_info
         )
