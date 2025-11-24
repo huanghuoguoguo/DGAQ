@@ -66,7 +66,7 @@ class WGAN_GP_Trainer:
         )[0]
         
         # 计算梯度的范数
-        gradients = gradients.view(gradients.size(0), -1)
+        gradients = gradients.reshape(gradients.size(0), -1)
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         
         return gradient_penalty
@@ -122,14 +122,28 @@ class WGAN_GP_Trainer:
                     self.g_optimizer.zero_grad()
                     
                     # 重新生成假样本 (保留梯度)
-                    fake_probs = self.generator(batch_size, self.device)
+                    fake_probs = self.generator(batch_size, self.device, temperature=0.5)
                     
                     # 判别器打分
                     fake_validity = self.discriminator(fake_probs)
                     
                     # Generator Loss
-                    # Minimize - E[D(G(z))]
-                    g_loss = -torch.mean(fake_validity)
+                    # 1. 对抗损失：Minimize - E[D(G(z))]
+                    adversarial_loss = -torch.mean(fake_validity)
+                    
+                    # 2. 多样性损失：鼓励字符分布均匀
+                    char_distribution = torch.mean(fake_probs, dim=(0, 1))  # (vocab_size,)
+                    diversity_loss = -torch.sum(char_distribution * torch.log(char_distribution + 1e-8))
+                    
+                    # 3. 长度期望损失：鼓励生成长度接近目标
+                    pad_idx = self.vocab_size - 2
+                    eos_idx = self.vocab_size - 1
+                    expected_len = torch.sum(1 - fake_probs[:, :, pad_idx] - fake_probs[:, :, eos_idx], dim=1).mean()
+                    target_len = self.config.get('target_len', 22)
+                    length_loss = (expected_len - target_len) ** 2
+                    
+                    # 4. 总损失
+                    g_loss = adversarial_loss - 0.01 * diversity_loss + 0.05 * length_loss
                     
                     g_loss.backward()
                     self.g_optimizer.step()
@@ -137,7 +151,9 @@ class WGAN_GP_Trainer:
                     # 更新进度条
                     pbar.set_postfix({
                         'D Loss': d_loss.item(), 
-                        'G Loss': g_loss.item()
+                        'G Loss': g_loss.item(),
+                        'Diversity': diversity_loss.item(),
+                        'LengthExp': expected_len.item()
                     })
             
             # 每个 Epoch 保存一次模型
@@ -152,7 +168,38 @@ class WGAN_GP_Trainer:
         """
         生成并打印样本
         """
-        indices = self.generator.sample(num_samples, self.device)
-        # 这里需要一个 index_to_char 的映射，暂时打印索引或需要传入 vocab
-        print(f"\n[Sample Indices]: {indices[0].cpu().numpy()}")
-        # TODO: Decode to string if vocab is available
+        # 字符映射表（与dataset.py保持一致）
+        CHARS = "abcdefghijklmnopqrstuvwxyz0123456789-."
+        PAD_IDX = len(CHARS)
+        EOS_IDX = len(CHARS) + 1
+        
+        def indices_to_domain(indices_array):
+            """将索引序列转换为域名字符串"""
+            domain = ""
+            count_a = 0
+            length = 0
+            for idx in indices_array:
+                if idx == PAD_IDX or idx == EOS_IDX or idx >= len(CHARS):
+                    break
+                ch = CHARS[idx] if idx < len(CHARS) else "?"
+                domain += ch
+                length += 1
+                if ch == 'a':
+                    count_a += 1
+                else:
+                    count_a = 0
+                # 如果出现过长的连续'a'（疑似填充），在达到一定长度后提前终止
+                if length >= 12 and count_a >= 8:
+                    break
+            return domain
+        
+        indices = self.generator.sample(num_samples, self.device, use_eos=True)
+        indices_np = indices.cpu().numpy()
+        
+        print("\n" + "="*60)
+        print("🎲 生成的DGA域名样本:")
+        print("="*60)
+        for i in range(num_samples):
+            domain = indices_to_domain(indices_np[i])
+            print(f"  {i+1}. {domain:40s} (长度: {len(domain)})")
+        print("="*60)
