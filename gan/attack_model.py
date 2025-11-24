@@ -9,17 +9,36 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from core.model.cnn_model import LightweightCNN
+from core.model.cnn_moe_model import LightweightCNNMoE
 from core.adversarial.generator import DGAGenerator
 from core.dataset import load_dataset
 
 def load_target_model(model_path, device, dataset_info):
-    """Load a simple CNN classifier as the target model"""
-    model = LightweightCNN(
-        vocab_size=dataset_info['vocab_size'],
-        embedding_dim=128,
-        max_length=dataset_info['max_length'],
-        num_classes=dataset_info['num_classes']
-    ).to(device)
+    """加载目标分类器，支持CNN与CNN-MoE"""
+    # 检测模型类型
+    if 'moe' in model_path.lower():
+        # 检测专家数量
+        state = torch.load(model_path, map_location='cpu', weights_only=False)
+        expert_keys = [k for k in state.keys() if k.startswith('experts.')]
+        num_experts = 3  # 默认值
+        if expert_keys:
+            max_expert = max([int(k.split('.')[1]) for k in expert_keys])
+            num_experts = max_expert + 1
+        
+        model = LightweightCNNMoE(
+            vocab_size=dataset_info['vocab_size'],
+            embedding_dim=128,
+            max_length=dataset_info['max_length'],
+            num_classes=dataset_info['num_classes'],
+            num_experts=num_experts
+        ).to(device)
+    else:
+        model = LightweightCNN(
+            vocab_size=dataset_info['vocab_size'],
+            embedding_dim=128,
+            max_length=dataset_info['max_length'],
+            num_classes=dataset_info['num_classes']
+        ).to(device)
     
     if os.path.exists(model_path):
         print(f"Loading CNN model from {model_path}")
@@ -60,16 +79,20 @@ def attack(args):
             dataset_info = dataset['info']
         elif 'metadata' in dataset:
             dataset_info = dataset['metadata']
+            # metadata格式转换为info格式
+            if 'vocab_size' not in dataset_info:
+                # 从训练数据推断vocab_size
+                from core.dataset import create_data_loaders
+                _, _, _, info = create_data_loaders(args.dataset_path, batch_size=32, task_type='binary')
+                dataset_info = info
         else:
-            dataset_info = {
-                'vocab_size': 40,
-                'max_length': 60,
-                'num_classes': 2
-            }
+            # 从数据加载器获取完整信息
+            from core.dataset import create_data_loaders
+            _, _, _, dataset_info = create_data_loaders(args.dataset_path, batch_size=32, task_type='binary')
     except FileNotFoundError:
         print(f"Dataset not found at {args.dataset_path}. Using default dataset info.")
         dataset_info = {
-            'vocab_size': 40,
+            'vocab_size': 41,
             'max_length': 60,
             'num_classes': 2
         }
@@ -126,9 +149,9 @@ def attack(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Attack classifier with GAN")
-    parser.add_argument('--target_model_path', type=str, default='./models/cnn_best_binary.pth')
+    parser.add_argument('--target_model_path', type=str, default='./models/cnn_binary_model.pth')
     parser.add_argument('--generator_path', type=str, default='./models/gan/generator_epoch_50.pth')
-    parser.add_argument('--dataset_path', type=str, default='./data/processed/small_dga_dataset.pkl')
+    parser.add_argument('--dataset_path', type=str, default='./data/processed/500k_unified_dga_dataset.pkl')
     parser.add_argument('--num_samples', type=int, default=1000)
     parser.add_argument('--z_dim', type=int, default=100)
     parser.add_argument('--hidden_dim', type=int, default=256)

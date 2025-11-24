@@ -81,8 +81,9 @@ class Trainer:
         expert_stats = None
         if is_moe:
             num_experts = getattr(self.model, 'num_experts', 0)
+            num_layers = getattr(self.model, 'num_layers', len(self.model.layers)) if hasattr(self.model, 'layers') else 1
             if num_experts > 0:
-                expert_stats = torch.zeros(num_experts).to(self.device)
+                expert_stats = torch.zeros(num_layers, num_experts).to(self.device)
         
         num_batches = len(train_loader)
         start_time = time.time()
@@ -153,7 +154,9 @@ class Trainer:
         
         # 如果是MoE模型，添加专家使用统计
         if is_moe and expert_stats is not None:
-            result['expert_usage'] = (expert_stats / num_batches).cpu().tolist()
+            # expert_stats: [num_layers, num_experts]
+            avg_expert_usage = (expert_stats / num_batches).cpu()  # [num_layers, num_experts]
+            result['expert_usage'] = avg_expert_usage.tolist()  # 保存为列表的列表
         
         return result
     
@@ -177,8 +180,9 @@ class Trainer:
         expert_stats = None
         if is_moe:
             num_experts = getattr(self.model, 'num_experts', 0)
+            num_layers = getattr(self.model, 'num_layers', len(self.model.layers)) if hasattr(self.model, 'layers') else 1
             if num_experts > 0:
-                expert_stats = torch.zeros(num_experts).to(self.device)
+                expert_stats = torch.zeros(num_layers, num_experts).to(self.device)
         
         print(f"开始验证...")
         
@@ -229,7 +233,9 @@ class Trainer:
         
         # 如果是MoE模型，添加专家使用统计
         if is_moe and expert_stats is not None:
-            result['expert_usage'] = (expert_stats / val_batches).cpu().tolist()
+            # expert_stats: [num_layers, num_experts]
+            avg_expert_usage = (expert_stats / val_batches).cpu()  # [num_layers, num_experts]
+            result['expert_usage'] = avg_expert_usage.tolist()  # 保存为列表的列表
         
         return result
     
@@ -283,15 +289,59 @@ class Trainer:
             
             # 如果是MoE模型，打印专家使用统计
             if 'expert_usage' in train_metrics:
-                print(f'  专家使用(训练): {train_metrics["expert_usage"]}')
+                expert_usage = train_metrics['expert_usage']  # [[layer1_exp1, layer1_exp2, ...], [layer2_exp1, ...]]
+                num_layers = len(expert_usage)
+                num_experts = len(expert_usage[0]) if num_layers > 0 else 0
+                
+                print(f'\n  📊 MoE专家使用统计（训练集）:')
+                
+                # 打印每层的专家使用情况
+                for layer_idx in range(num_layers):
+                    print(f'\n    第 {layer_idx+1} 层:')
+                    for expert_idx in range(num_experts):
+                        usage = expert_usage[layer_idx][expert_idx]
+                        bar_len = int(usage * 50)
+                        bar = '█' * bar_len + '░' * (50 - bar_len)
+                        print(f'      专家 {expert_idx+1}: [{bar}] {usage*100:.2f}%')
+                
+                # 检测专家塌陷（平均所有层）
+                avg_usage_per_expert = [sum(expert_usage[l][e] for l in range(num_layers)) / num_layers 
+                                       for e in range(num_experts)]
+                expected = 1.0 / num_experts
+                max_imbalance = max([abs(u - expected) for u in avg_usage_per_expert])
+                
+                if max_imbalance > 0.2:  # 如果偏差超过20%
+                    print(f'\n     ⚠️  警告: 专家负载不均衡! 最大偏差={max_imbalance*100:.1f}%')
+                if any(u < 0.05 for u in avg_usage_per_expert):  # 如果有专家使用率<5%
+                    print(f'     ⚠️  警告: 检测到专家塌陷! 某些专家几乎不被使用')
+            
             if 'expert_usage' in val_metrics:
-                print(f'  专家使用(验证): {val_metrics["expert_usage"]}')
+                expert_usage = val_metrics['expert_usage']
+                num_layers = len(expert_usage)
+                num_experts = len(expert_usage[0]) if num_layers > 0 else 0
+                
+                print(f'\n  📊 MoE专家使用统计（验证集）:')
+                
+                for layer_idx in range(num_layers):
+                    print(f'\n    第 {layer_idx+1} 层:')
+                    for expert_idx in range(num_experts):
+                        usage = expert_usage[layer_idx][expert_idx]
+                        bar_len = int(usage * 50)
+                        bar = '█' * bar_len + '░' * (50 - bar_len)
+                        print(f'      专家 {expert_idx+1}: [{bar}] {usage*100:.2f}%')
             
             log_msg = (f'Epoch [{epoch+1}/{num_epochs}] - '
                       f'Train Loss: {train_metrics["loss"]:.4f}, Train Acc: {train_metrics["accuracy"]:.2f}%, '
                       f'Val Loss: {val_metrics["loss"]:.4f}, Val Acc: {val_metrics["accuracy"]:.2f}%')
             if 'expert_usage' in train_metrics:
-                log_msg += f', Expert Usage: {train_metrics["expert_usage"]}'
+                # 记录专家使用详情（平均所有层）
+                expert_usage = train_metrics['expert_usage']
+                num_layers = len(expert_usage)
+                num_experts = len(expert_usage[0]) if num_layers > 0 else 0
+                avg_usage_per_expert = [sum(expert_usage[l][e] for l in range(num_layers)) / num_layers 
+                                       for e in range(num_experts)]
+                expert_usage_str = ', '.join([f'E{i+1}:{u*100:.1f}%' for i, u in enumerate(avg_usage_per_expert)])
+                log_msg += f', Expert Usage: [{expert_usage_str}]'
             self.logger.info(log_msg)
             
             # 执行回调函数

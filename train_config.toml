@@ -3,7 +3,7 @@
 
 # 全局训练参数
 [global]
-task_type = "binary"  # binary 或 multiclass
+task_type = "multiclass"  # binary 或 multiclass
 dataset_path = "/jsj_ywj/yhh/DGAQ/data/processed/500k_unified_dga_dataset.pkl"
 batch_size = 512  # 提高到512以充分利用3090 (24GB显存)
 epochs = 10
@@ -106,10 +106,10 @@ embedding_dim = 256  # Mamba2-MoE需要更大的embedding_dim
 num_layers = 2
 d_state = 128
 headdim = 64
-num_experts = 3
-aux_weight = 0.3
-balance_weight = 0.01
-dropout_rate = 0.3
+num_experts = 4  # 增加专家数量，提高表达能力
+aux_weight = 0.1  # 降低辅助损失权重（原来0.3太大）
+balance_weight = 0.005  # 降低负载均衡权重（原来0.01可能过大）
+dropout_rate = 0.2  # 降低dropout防止欠拟合（参数多需要更多正则化但不要过度）
 
 [[models]]
 name = "tcbam"
@@ -117,6 +117,5 @@ enabled = true
 model_class_path = "core.model.tcbam_model.LightweightTCBAM"
 [models.model_params]
 embedding_dim = 128
-num_layers = 2
 num_heads = 4
 dropout_rate = 0.3

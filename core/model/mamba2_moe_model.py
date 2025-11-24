@@ -25,24 +25,36 @@ except ImportError:
 
 
 class MoELayer(nn.Module):
-    """Token级稀疏MoE层"""
-    def __init__(self, d_model: int, num_experts: int = 3, expert_hidden: int = 512, dropout: float = 0.1):
+    """改进的序列级MoE层
+    
+    关键改进：
+    1. Top-2路由：融合两个专家的优势
+    2. 专家容量优化：减小hidden_dim避免过拟合
+    3. 添加专家正则化：鼓励专家差异化
+    """
+    def __init__(self, d_model: int, num_experts: int = 3, expert_hidden: int = 512, dropout: float = 0.1, top_k: int = 2):
         super().__init__()
         self.num_experts = num_experts
         self.d_model = d_model
+        self.top_k = min(top_k, num_experts)  # 最多选择top_k个专家
 
-        # 专家网络：轻量级FFN
+        # 专家网络：更轻量化（避免过拟合）
         self.experts = nn.ModuleList([
             nn.Sequential(
                 nn.Linear(d_model, expert_hidden),
-                nn.ReLU(),
-                nn.Dropout(dropout),
+                nn.GELU(),  # GELU比ReLU更平滑
                 nn.Linear(expert_hidden, d_model)
             ) for _ in range(num_experts)
         ])
 
-        # 门控网络
-        self.gate = nn.Linear(d_model, num_experts)
+        # 门控网络：添加层归一化提升稳定性
+        self.gate = nn.Sequential(
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, num_experts)
+        )
+        
+        # 噪声注入（训练时帮助专家探索）
+        self.noise_epsilon = 1e-2
 
     def forward(self, x: torch.Tensor) -> tuple:
         """
@@ -55,24 +67,37 @@ class MoELayer(nn.Module):
         B, L, D = x.shape
         x_flat = x.contiguous().view(-1, D)  # [B*L, D]
 
-        # Top-1 路由
+        # 门控路由（训练时添加噪声）
         gate_logits = self.gate(x_flat)  # [B*L, num_experts]
-        gate_weights = F.softmax(gate_logits, dim=-1)
-        top_w, top_idx = torch.topk(gate_weights, k=1, dim=-1)  # [B*L, 1]
-
-        # GPU并行化稀疏计算 - 避免Python循环
-        # 方法：所有专家并行计算，然后用mask选择
-        out_flat = torch.zeros_like(x_flat)  # [B*L, D]
         
-        # 批量处理所有专家（GPU并行）
+        if self.training:
+            # 训练时添加高斯噪声，鼓励探索
+            noise = torch.randn_like(gate_logits) * self.noise_epsilon
+            gate_logits = gate_logits + noise
+        
+        gate_weights = F.softmax(gate_logits, dim=-1)
+        
+        # Top-K路由（默认Top-2）
+        top_w, top_idx = torch.topk(gate_weights, k=self.top_k, dim=-1)  # [B*L, top_k]
+        
+        # 重归一化top-k权重
+        top_w = top_w / top_w.sum(dim=-1, keepdim=True)
+        
+        # 所有专家并行计算
         expert_outputs = torch.stack([expert(x_flat) for expert in self.experts], dim=1)  # [B*L, num_experts, D]
         
-        # 使用gather选择对应的专家输出
-        top_idx_expanded = top_idx.unsqueeze(-1).expand(-1, -1, D)  # [B*L, 1, D]
-        selected_expert = torch.gather(expert_outputs, 1, top_idx_expanded).squeeze(1)  # [B*L, D]
-        
-        # 应用门控权重
-        out_flat = top_w.squeeze(1).unsqueeze(-1) * selected_expert  # [B*L, D]
+        # 融合top-k个专家的输出
+        out_flat = torch.zeros_like(x_flat)  # [B*L, D]
+        for k in range(self.top_k):
+            expert_idx = top_idx[:, k:k+1]  # [B*L, 1]
+            expert_weight = top_w[:, k:k+1]  # [B*L, 1]
+            
+            # 选择对应专家的输出
+            expert_idx_expanded = expert_idx.unsqueeze(-1).expand(-1, -1, D)  # [B*L, 1, D]
+            selected_output = torch.gather(expert_outputs, 1, expert_idx_expanded).squeeze(1)  # [B*L, D]
+            
+            # 加权累加
+            out_flat = out_flat + expert_weight * selected_output
 
         out = out_flat.view(B, L, D)
         return out, gate_weights
@@ -116,12 +141,16 @@ class Mamba2MoELayer(nn.Module):
             out: [batch_size, seq_len, d_model]
             gate_weights: [batch_size * seq_len, num_experts]
         """
-        # Mamba2 分支
-        x = x + self.dropout(self.norm_mamba(self.mamba2(x)))
+        # Mamba2 分支（Post-Norm，与原版Mamba2保持一致）
+        residual = x
+        x = self.norm_mamba(self.mamba2(x))
+        x = residual + self.dropout(x)
         
-        # MoE 分支
+        # MoE 分支（Post-Norm）
+        residual = x
         moe_out, gate_weights = self.moe(x)
-        x = x + self.dropout(self.norm_moe(moe_out))
+        x = self.norm_moe(moe_out)
+        x = residual + self.dropout(x)
         
         return x, gate_weights
 
@@ -147,6 +176,7 @@ class LightweightMamba2MoE(nn.Module):
         # 兼容aux_weight参数，实际使用balance_weight
         self.balance_weight = balance_weight if aux_weight == 1e-2 else aux_weight
         self.embedding_dim = embedding_dim
+        self.num_experts = num_experts  # 添加此属性供Trainer使用
         
         # 确保embedding_dim是8的倍数（Mamba2 causal_conv1d要求）
         if embedding_dim % 8 != 0:
@@ -219,17 +249,52 @@ class LightweightMamba2MoE(nn.Module):
         return x
     
     def compute_loss(self, logits, y_true, gate_info):
-        """总损失 = CE + 负载均衡"""
+        """总损失 = CE + 负载均衡 + 多样性损失
+        
+        改进的负载均衡策略：
+        1. 使用Top-K统计（而非argmax）
+        2. 添加专家多样性损失（鼓励专家学习不同模式）
+        3. 增强负载均衡惩罚力度
+        """
         ce_loss = F.cross_entropy(logits, y_true)
         
-        # 负载均衡损失
+        # 负载均衡损失（适配Top-K路由）
         balance_loss = 0.0
-        for gw in gate_info['gate_weights']:
-            f_i = gw.mean(dim=0)
-            p_i = torch.softmax(gw, dim=-1).mean(dim=0)
-            balance_loss += (f_i * p_i).sum()
+        diversity_loss = 0.0
+        num_experts = self.layers[0].moe.num_experts
+        top_k = self.layers[0].moe.top_k
         
-        total_loss = ce_loss + self.balance_weight * balance_loss
+        for gw in gate_info['gate_weights']:
+            # gw: [B*L, num_experts] softmax后的门控权重
+            
+            # === 1. 负载均衡损失（适配Top-K）===
+            # 统计每个专家被选入Top-K的频率
+            top_idx = torch.topk(gw, k=top_k, dim=-1)[1]  # [B*L, top_k]
+            f_i = torch.zeros(num_experts, device=gw.device)
+            for i in range(num_experts):
+                # 计算专家i出现在top_k中的频率
+                f_i[i] = (top_idx == i).any(dim=-1).float().mean()
+            
+            # 平均门控权重
+            p_i = gw.mean(dim=0)  # [num_experts]
+            
+            # Switch Transformer的负载均衡损失
+            # 希望f_i和p_i都接近1/num_experts
+            balance_loss += num_experts * (f_i * p_i).sum()
+            
+            # === 2. 专家多样性损失（新增）===
+            # 计算门控权重的方差，方差越大说明专家分化越明显
+            # 我们希望方差不要太小（避免所有专家输出相同）
+            gate_variance = gw.var(dim=0).mean()
+            # 惩罚过小的方差（鼓励专家多样性）
+            diversity_loss += torch.relu(0.01 - gate_variance)  # 如果方差<0.01则惩罚
+        
+        # 平均多层的损失
+        balance_loss = balance_loss / len(gate_info['gate_weights'])
+        diversity_loss = diversity_loss / len(gate_info['gate_weights'])
+        
+        # 组合损失（增强负载均衡权重）
+        total_loss = ce_loss + self.balance_weight * balance_loss + 0.01 * diversity_loss
         return total_loss
 
 

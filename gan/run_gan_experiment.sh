@@ -6,15 +6,15 @@ set -e  # 遇到错误即退出
 
 # ==================== 配置参数 ====================
 EPOCHS=50
-BATCH_SIZE=256
+BATCH_SIZE=512
 LR=1e-4
 Z_DIM=100
 HIDDEN_DIM=256
 DISCRIMINATOR_TYPE="cnn"
-DATASET_PATH="./data/processed/small_dga_dataset.pkl"
+DATASET_PATH="./data/processed/500k_unified_dga_dataset.pkl"
 
 # 攻击参数
-TARGET_MODEL="./models/cnn_best_binary.pth"
+TARGET_MODEL="./models/cnn_binary_model.pth"
 NUM_ATTACK_SAMPLES=1000
 
 # ==================== 步骤1: 训练GAN ====================

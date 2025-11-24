@@ -1,0 +1,49 @@
+# Mamba2 vs Mamba2-MoE 对比训练配置
+# 专注于对比两个模型的性能差异
+
+# 全局训练参数
+[global]
+task_type = "binary"  # binary 或 multiclass
+dataset_path = "/jsj_ywj/yhh/DGAQ/data/processed/500k_unified_dga_dataset.pkl"
+batch_size = 512
+epochs = 10
+learning_rate = 0.001
+
+# ============================================================
+# Mamba2 基线模型
+# ============================================================
+[[models]]
+name = "mamba2"
+enabled = true
+model_class_path = "core.model.mamba2_model.LightweightMamba2"
+[models.model_params]
+embedding_dim = 256
+num_layers = 2
+d_state = 128
+d_conv = 4
+expand = 2
+headdim = 64
+dropout_rate = 0.3
+
+# ============================================================
+# Mamba2-MoE 最终优化版本 v4 - 强制专家均衡
+# 关键改进：
+# 1. 修复Top-K负载均衡统计bug
+# 2. 添加专家多样性损失
+# 3. 大幅增强balance_weight：0.0005→0.01（强制均衡）
+# 4. 降低噪声，提升稳定性
+# ============================================================
+[[models]]
+name = "mamba2_moe"
+enabled = true
+model_class_path = "core.model.mamba2_moe_model.LightweightMamba2MoE"
+[models.model_params]
+embedding_dim = 256
+num_layers = 2
+d_state = 128
+headdim = 64
+num_experts = 3
+expert_hidden = 192
+aux_weight = 0.01
+balance_weight = 0.01  # 0.0005→0.01：大幅增强，强制专家均衡
+dropout_rate = 0.2

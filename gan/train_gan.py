@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--lr', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--z_dim', type=int, default=100, help='Latent dimension size')
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension size')
-    parser.add_argument('--dataset_path', type=str, default='./data/processed/small_dga_dataset.pkl', help='Path to dataset')
+    parser.add_argument('--dataset_path', type=str, default='./data/processed/500k_unified_dga_dataset.pkl', help='Path to dataset')
     # 新增：判别器类型与mamba2嵌入维度
     parser.add_argument('--discriminator', type=str, default='cnn', choices=['mamba2', 'cnn'], help='Discriminator type: mamba2 or cnn')
     parser.add_argument('--embedding_dim', type=int, default=128, help='Embedding dim for Mamba2 discriminator (must be multiple of 8)')
