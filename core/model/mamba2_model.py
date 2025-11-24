@@ -50,7 +50,7 @@ class LightweightMamba2(nn.Module):
         
         Args:
             vocab_size: 词汇表大小
-            embedding_dim: 嵌入维度（必须能被headdim整除）
+            embedding_dim: 嵌入维度（必须能被headdim整除，且是8的倍数）
             max_length: 最大序列长度（仅用于位置编码）
             num_classes: 分类数量
             num_layers: Mamba2 层数
@@ -61,6 +61,10 @@ class LightweightMamba2(nn.Module):
             dropout_rate: Dropout 比率
         """
         super().__init__()
+        
+        # 确保embedding_dim是8的倍数（causal_conv1d要求）
+        if embedding_dim % 8 != 0:
+            raise ValueError(f"embedding_dim必须是8的倍数，当前值: {embedding_dim}")
         
         self.vocab_size = vocab_size
         self.embedding_dim = embedding_dim
@@ -121,9 +125,14 @@ class LightweightMamba2(nn.Module):
         x = self.embedding(x) + self.pos_encoding[:, :x.size(1), :]  # [B, L, D]
         x = self.dropout(x)
         
+        # 确保tensor是连续的，满足causal_conv1d的stride要求
+        x = x.contiguous()
+        
         # Mamba2 层处理
         for mamba2, norm in zip(self.layers, self.norms):
-            x = x + self.dropout(norm(mamba2(x)))  # 残差连接
+            residual = x
+            x = norm(mamba2(x.contiguous()))  # 确保每次输入都是连续的
+            x = residual + self.dropout(x)
         
         # 平均池化（忽略padding）
         padding_mask = (x.sum(dim=-1) != 0).unsqueeze(-1).float()  # [B, L, 1]

@@ -141,10 +141,16 @@ class LightweightMamba2MoE(nn.Module):
                  num_experts: int = 3,
                  expert_hidden: int = 512,
                  dropout_rate: float = 0.3,
+                 aux_weight: float = 1e-2,     # 辅助损失权重（兼容参数）
                  balance_weight: float = 1e-2):
         super().__init__()
-        self.balance_weight = balance_weight
+        # 兼容aux_weight参数，实际使用balance_weight
+        self.balance_weight = balance_weight if aux_weight == 1e-2 else aux_weight
         self.embedding_dim = embedding_dim
+        
+        # 确保embedding_dim是8的倍数（Mamba2 causal_conv1d要求）
+        if embedding_dim % 8 != 0:
+            raise ValueError(f"embedding_dim必须是8的倍数，当前值: {embedding_dim}")
         
         # 嵌入层
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
@@ -181,14 +187,18 @@ class LightweightMamba2MoE(nn.Module):
         self.fc2.bias.data.zero_()
         self.fc2.weight.data.uniform_(-initrange, initrange)
     
-    def forward(self, x: torch.Tensor, return_gate_info: bool = False):
+    def forward(self, x: torch.Tensor, return_gate: bool = False):
         # x: [B, L]
         x = self.embedding(x) + self.pos_encoding[:, :x.size(1), :]  # [B, L, D]
         x = self.dropout(x)
         
+        # 确保连续性，满足Mamba2 causal_conv1d的stride要求
+        x = x.contiguous()
+        
         # 逐层处理
         all_gate_weights = []
         for layer in self.layers:
+            x = x.contiguous()  # 每层前确保连续
             x, gate_weights = layer(x)
             all_gate_weights.append(gate_weights)
         
@@ -200,7 +210,7 @@ class LightweightMamba2MoE(nn.Module):
         x = self.dropout(F.relu(self.fc1(x)))
         x = self.fc2(x)
         
-        if return_gate_info:
+        if return_gate:
             gate_info = {
                 'gate_weights': all_gate_weights,
                 'expert_usage': torch.stack([gw.mean(dim=0) for gw in all_gate_weights])
@@ -248,7 +258,7 @@ if __name__ == "__main__":
     ).to(device)
     
     model.train()
-    logits, info = model(x, return_gate_info=True)
+    logits, info = model(x, return_gate=True)
     loss = model.compute_loss(logits, y, info)
     print(f"训练 - loss: {loss.item():.4f}")
     print(f"专家使用率: {info['expert_usage'].mean(dim=1).tolist()}")

@@ -6,7 +6,7 @@ import numpy as np
 import os
 from tqdm import tqdm
 from .generator import DGAGenerator
-from .discriminator import DGADiscriminator
+from .discriminator import DGADiscriminator, Mamba2Discriminator
 
 class WGAN_GP_Trainer:
     """
@@ -24,11 +24,24 @@ class WGAN_GP_Trainer:
             z_dim=config['z_dim']
         ).to(device)
         
-        self.discriminator = DGADiscriminator(
-            vocab_size=config['vocab_size'],
-            hidden_dim=config['hidden_dim'],
-            max_len=config['max_len']
-        ).to(device)
+        # 判别器类型选择: 'mamba2' 或 'cnn'
+        disc_type = self.config.get('discriminator', 'cnn')
+        if disc_type == 'mamba2':
+            emb_dim = self.config.get('embedding_dim', 128)
+            self.discriminator = Mamba2Discriminator(
+                vocab_size=config['vocab_size'],
+                embedding_dim=emb_dim,
+                max_len=config['max_len'],
+                num_layers=self.config.get('mamba2_layers', 2),
+                d_state=self.config.get('mamba2_d_state', 128),
+                headdim=self.config.get('mamba2_headdim', 64)
+            ).to(device)
+        else:
+            self.discriminator = DGADiscriminator(
+                vocab_size=config['vocab_size'],
+                hidden_dim=config['hidden_dim'],
+                max_len=config['max_len']
+            ).to(device)
         
         # 优化器
         self.g_optimizer = optim.Adam(self.generator.parameters(), lr=config['lr'], betas=(0.5, 0.9))
@@ -66,7 +79,7 @@ class WGAN_GP_Trainer:
         )[0]
         
         # 计算梯度的范数
-        gradients = gradients.view(gradients.size(0), -1)
+        gradients = gradients.reshape(gradients.size(0), -1)
         gradient_penalty = ((gradients.norm(2, dim=1) - 1) ** 2).mean()
         
         return gradient_penalty

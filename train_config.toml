@@ -1,0 +1,107 @@
+# 统一训练配置文件
+# 支持按顺序训练多个模型并比对结果
+
+# 全局训练参数
+[global]
+task_type = "binary"  # binary 或 multiclass
+dataset_path = "/jsj_ywj/yhh/DGAQ/data/processed/500k_unified_dga_dataset.pkl"
+batch_size = 512  # 提高到512以充分利用3090 (24GB显存)
+epochs = 10  # 快速测试所有模型
+learning_rate = 0.001
+
+# 模型配置列表（按顺序训练）
+[[models]]
+name = "cnn"
+enabled = true
+
+[models.model_params]
+embedding_dim = 128
+dropout_rate = 0.5
+
+[[models]]
+name = "transformer"
+enabled = true
+[models.model_params]
+embedding_dim = 128
+num_heads = 4
+num_layers = 2
+dim_feedforward = 256
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba"
+enabled = true
+[models.model_params]
+embedding_dim = 128
+num_layers = 2
+d_state = 16
+d_conv = 4
+expand = 2
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba2"
+enabled = true
+[models.model_params]
+embedding_dim = 256  # Mamba2需要更大的embedding_dim才能稳定工作（测试显示256可用）
+num_layers = 2
+d_state = 128  # Mamba2建议使用更大的状态维度
+d_conv = 4
+expand = 2
+headdim = 64  # embedding_dim必须能被headdim整除 (256/64=4)
+dropout_rate = 0.3
+
+[[models]]
+name = "cnn_moe"
+enabled = true
+[models.model_params]
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.5
+
+[[models]]
+name = "transformer_moe"
+enabled = true
+[models.model_params]
+embedding_dim = 128
+num_heads = 4
+num_layers = 2
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba_moe"
+enabled = true
+[models.model_params]
+embedding_dim = 128
+num_layers = 2
+d_state = 16
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba2_moe"
+enabled = true
+[models.model_params]
+embedding_dim = 256  # Mamba2-MoE需要更大的embedding_dim
+num_layers = 2
+d_state = 128
+headdim = 64
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.3
+
+[[models]]
+name = "tcbam"
+enabled = true
+[models.model_params]
+embedding_dim = 128
+num_layers = 2
+num_heads = 4
+dropout_rate = 0.3

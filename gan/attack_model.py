@@ -5,28 +5,24 @@ import sys
 import numpy as np
 
 # Add project root to path
-project_root = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from core.model.mamba2_moe_model import LightweightMamba2MoE
+from core.model.cnn_model import LightweightCNN
 from core.adversarial.generator import DGAGenerator
 from core.dataset import load_dataset
 
-def load_mamba_model(model_path, device, dataset_info):
-    """Load the target Mamba2-MoE model"""
-    model = LightweightMamba2MoE(
+def load_target_model(model_path, device, dataset_info):
+    """Load a simple CNN classifier as the target model"""
+    model = LightweightCNN(
         vocab_size=dataset_info['vocab_size'],
-        embedding_dim=256,
+        embedding_dim=128,
         max_length=dataset_info['max_length'],
-        num_classes=dataset_info['num_classes'],
-        num_layers=2,       # Default config from train_mamba2_moe.py
-        num_experts=3,
-        d_state=128,
-        headdim=64
+        num_classes=dataset_info['num_classes']
     ).to(device)
     
     if os.path.exists(model_path):
-        print(f"Loading Mamba2-MoE model from {model_path}")
+        print(f"Loading CNN model from {model_path}")
         model.load_state_dict(torch.load(model_path, map_location=device))
     else:
         print(f"Warning: Model file {model_path} not found. Using random weights for testing.")
@@ -58,15 +54,22 @@ def attack(args):
     # 1. Get Dataset Info (for vocab size etc)
     # We need to know the vocab mapping to decode or to ensure compatibility
     # For simplicity, we assume the dataset pickle has the info
-    dataset = load_dataset(args.dataset_path)
-    if 'info' in dataset:
-        dataset_info = dataset['info']
-    elif 'metadata' in dataset:
-        dataset_info = dataset['metadata']
-    else:
-        # Fallback defaults
+    try:
+        dataset = load_dataset(args.dataset_path)
+        if 'info' in dataset:
+            dataset_info = dataset['info']
+        elif 'metadata' in dataset:
+            dataset_info = dataset['metadata']
+        else:
+            dataset_info = {
+                'vocab_size': 40,
+                'max_length': 60,
+                'num_classes': 2
+            }
+    except FileNotFoundError:
+        print(f"Dataset not found at {args.dataset_path}. Using default dataset info.")
         dataset_info = {
-            'vocab_size': 40, # Approximate
+            'vocab_size': 40,
             'max_length': 60,
             'num_classes': 2
         }
@@ -74,7 +77,7 @@ def attack(args):
     print(f"Dataset Info: Vocab={dataset_info.get('vocab_size')}, MaxLen={dataset_info.get('max_length')}")
 
     # 2. Load Models
-    target_model = load_mamba_model(args.target_model_path, device, dataset_info)
+    target_model = load_target_model(args.target_model_path, device, dataset_info)
     
     gen_config = {
         'vocab_size': dataset_info.get('vocab_size', 40),
@@ -122,8 +125,8 @@ def attack(args):
                 print(f"  {adv_indices[idx].cpu().numpy()}")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Attack Mamba2-MoE with GAN")
-    parser.add_argument('--target_model_path', type=str, default='./models/mamba2_moe_best_binary.pth')
+    parser = argparse.ArgumentParser(description="Attack classifier with GAN")
+    parser.add_argument('--target_model_path', type=str, default='./models/cnn_best_binary.pth')
     parser.add_argument('--generator_path', type=str, default='./models/gan/generator_epoch_50.pth')
     parser.add_argument('--dataset_path', type=str, default='./data/processed/small_dga_dataset.pkl')
     parser.add_argument('--num_samples', type=int, default=1000)

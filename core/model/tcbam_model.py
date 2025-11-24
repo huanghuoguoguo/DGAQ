@@ -116,10 +116,15 @@ class ShallowSpatialTemporalExtractor(nn.Module):
         return attn_out.mean(dim=1)  # [batch, hidden_size*2]
 
 
-class DGA_DETECTION_MODEL(nn.Module):
+class LightweightTCBAM(nn.Module):
     """基于Transformer和多特征融合的DGA域名检测模型"""
-    def __init__(self, vocab_size, d_model=64, nhead=4, num_classes=41, max_len=40):
+    def __init__(self, vocab_size, embedding_dim=64, num_heads=4, num_classes=41, max_length=40, dropout_rate=0.3):
         super().__init__()
+        
+        # 兼容参数名
+        d_model = embedding_dim
+        nhead = num_heads
+        max_len = max_length
         
         # 1. 输入层
         self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=0)
@@ -141,11 +146,11 @@ class DGA_DETECTION_MODEL(nn.Module):
         
         # 4. 输出层
         total_feature_dim = 128 * 4  # k2+k3+shallow1+shallow2
-        self.dropout = nn.Dropout(0.5)
+        self.dropout = nn.Dropout(dropout_rate)
         self.classifier = nn.Sequential(
             nn.Linear(total_feature_dim, 256),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(dropout_rate),
             nn.Linear(256, num_classes)
         )
         
@@ -179,10 +184,10 @@ class DGA_DETECTION_MODEL(nn.Module):
 # 模型使用示例
 if __name__ == '__main__':
     # 二分类示例
-    model_binary = DGA_DETECTION_MODEL(vocab_size=38, num_classes=2)  # 37个字符+pad+unk
+    model_binary = LightweightTCBAM(vocab_size=38, num_classes=2)  # 37个字符+pad+unk
     
     # 多分类示例（40个DGA家族+良性域名）
-    model_multiclass = DGA_DETECTION_MODEL(vocab_size=38, num_classes=41)
+    model_multiclass = LightweightTCBAM(vocab_size=38, num_classes=41)
     
     # 测试前向传播
     batch_size, seq_len = 256, 40
