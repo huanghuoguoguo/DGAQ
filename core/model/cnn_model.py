@@ -108,54 +108,6 @@ class LightweightCNN(nn.Module):
 
 
 
-def evaluate_predictions(y_true: np.ndarray, y_pred: np.ndarray, class_names: list = None) -> Dict[str, Any]:
-    """
-    评估预测结果
-    
-    Args:
-        y_true: 真实标签
-        y_pred: 预测标签
-        class_names: 类别名称
-        
-    Returns:
-        评估结果
-    """
-    from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix
-    
-    # 计算基本指标
-    accuracy = accuracy_score(y_true, y_pred)
-    precision, recall, f1, _ = precision_recall_fscore_support(y_true, y_pred, average='weighted')
-    
-    # 计算混淆矩阵
-    cm = confusion_matrix(y_true, y_pred)
-    
-    # 构建结果字典
-    results = {
-        'accuracy': accuracy,
-        'precision': precision,
-        'recall': recall,
-        'f1_score': f1,
-        'confusion_matrix': cm
-    }
-    
-    # 如果提供了类别名称，计算每个类别的指标
-    if class_names:
-        # 计算每个类别的精确率、召回率和F1分数
-        precision_per_class, recall_per_class, f1_per_class, _ = precision_recall_fscore_support(y_true, y_pred)
-        
-        class_metrics = {}
-        for i, class_name in enumerate(class_names):
-            if i < len(precision_per_class):
-                class_metrics[class_name] = {
-                    'precision': precision_per_class[i],
-                    'recall': recall_per_class[i],
-                    'f1_score': f1_per_class[i]
-                }
-        
-        results['class_metrics'] = class_metrics
-    
-    return results
-
 
 if __name__ == "__main__":
     print("轻量级CNN模型模块")

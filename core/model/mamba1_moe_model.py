@@ -133,9 +133,11 @@ class LightweightMambaMoE(nn.Module):
                  num_experts: int = 3,         # 每层MoE专家数
                  expert_hidden: int = 256,
                  dropout_rate: float = 0.3,
+                 aux_weight: float = 1e-2,     # 辅助损失权重（兼容参数）
                  balance_weight: float = 1e-2):
         super().__init__()
-        self.balance_weight = balance_weight
+        # 兼容aux_weight参数，实际使用balance_weight
+        self.balance_weight = balance_weight if aux_weight == 1e-2 else aux_weight
         
         # 嵌入层
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
@@ -171,7 +173,7 @@ class LightweightMambaMoE(nn.Module):
         self.fc2.bias.data.zero_()
         self.fc2.weight.data.uniform_(-initrange, initrange)
     
-    def forward(self, x: torch.Tensor, return_gate_info: bool = False):
+    def forward(self, x: torch.Tensor, return_gate: bool = False):
         # x: [B, L]
         x = self.embedding(x) + self.pos_encoding[:, :x.size(1), :]  # [B, L, D]
         x = self.dropout(x)
@@ -190,7 +192,7 @@ class LightweightMambaMoE(nn.Module):
         x = self.dropout(F.relu(self.fc1(x)))
         x = self.fc2(x)
         
-        if return_gate_info:
+        if return_gate:
             gate_info = {
                 'gate_weights': all_gate_weights,
                 'expert_usage': torch.stack([gw.mean(dim=0) for gw in all_gate_weights])
@@ -239,7 +241,7 @@ if __name__ == "__main__":
     
     # 训练模式
     model.train()
-    logits, info = model(x, return_gate_info=True)
+    logits, info = model(x, return_gate=True)
     loss = model.compute_loss(logits, y, info)
     print(f"训练 - loss: {loss.item():.4f}")
     print(f"专家使用率: {info['expert_usage'].mean(dim=1).tolist()}")  # 每层平均

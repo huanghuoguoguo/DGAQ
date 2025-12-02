@@ -1,0 +1,121 @@
+# 统一训练配置文件
+# 完全配置驱动，符合开闭原则
+
+# 全局训练参数
+[global]
+task_type = "multiclass"  # binary 或 multiclass
+dataset_path = "/jsj_ywj/yhh/DGAQ/data/processed/500k_unified_dga_dataset.pkl"
+batch_size = 512  # 提高到512以充分利用3090 (24GB显存)
+epochs = 10
+learning_rate = 0.001
+
+# ============================================================
+# 模型配置列表（按顺序训练）
+# 说明：
+#   - name: 模型显示名称（用于日志）
+#   - model_class_path: 模型类的完整路径（必需）
+#   - model_params: 模型构造参数
+# ============================================================
+
+[[models]]
+name = "cnn"
+enabled = true
+model_class_path = "core.model.cnn_model.LightweightCNN"
+[models.model_params]
+embedding_dim = 128
+dropout_rate = 0.5
+
+[[models]]
+name = "transformer"
+enabled = true
+model_class_path = "core.model.transformer_model.LightweightTransformer"
+[models.model_params]
+embedding_dim = 128
+num_heads = 4
+num_layers = 2
+dim_feedforward = 256
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba"
+enabled = true
+model_class_path = "core.model.mamba1_model.LightweightMamba"
+[models.model_params]
+embedding_dim = 128
+num_layers = 2
+d_state = 16
+d_conv = 4
+expand = 2
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba2"
+enabled = true
+model_class_path = "core.model.mamba2_model.LightweightMamba2"
+[models.model_params]
+embedding_dim = 256  # Mamba2需要更大的embedding_dim才能稳定工作（测试显示256可用）
+num_layers = 2
+d_state = 128  # Mamba2建议使用更大的状态维度
+d_conv = 4
+expand = 2
+headdim = 64  # embedding_dim必须能被headdim整除 (256/64=4)
+dropout_rate = 0.3
+
+[[models]]
+name = "cnn_moe"
+enabled = true
+model_class_path = "core.model.cnn_moe_model.LightweightCNNMoE"
+[models.model_params]
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.5
+
+[[models]]
+name = "transformer_moe"
+enabled = true
+model_class_path = "core.model.transformer_moe_model.LightweightTransformerMoE"
+[models.model_params]
+embedding_dim = 128
+num_heads = 4
+num_layers = 2
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba_moe"
+enabled = true
+model_class_path = "core.model.mamba1_moe_model.LightweightMambaMoE"
+[models.model_params]
+embedding_dim = 128
+num_layers = 2
+d_state = 16
+num_experts = 3
+aux_weight = 0.3
+balance_weight = 0.01
+dropout_rate = 0.3
+
+[[models]]
+name = "mamba2_moe"
+enabled = true
+model_class_path = "core.model.mamba2_moe_model.LightweightMamba2MoE"
+[models.model_params]
+embedding_dim = 256  # Mamba2-MoE需要更大的embedding_dim
+num_layers = 2
+d_state = 128
+headdim = 64
+num_experts = 4  # 增加专家数量，提高表达能力
+aux_weight = 0.1  # 降低辅助损失权重（原来0.3太大）
+balance_weight = 0.005  # 降低负载均衡权重（原来0.01可能过大）
+dropout_rate = 0.2  # 降低dropout防止欠拟合（参数多需要更多正则化但不要过度）
+
+[[models]]
+name = "tcbam"
+enabled = true
+model_class_path = "core.model.tcbam_model.LightweightTCBAM"
+[models.model_params]
+embedding_dim = 128
+num_heads = 4
+dropout_rate = 0.3

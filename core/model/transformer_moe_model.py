@@ -158,7 +158,7 @@ class LightweightTransformerMoE(nn.Module):
         self.fc2.bias.data.zero_()
         self.fc2.weight.data.uniform_(-initrange, initrange)
 
-    def forward(self, x: torch.Tensor, return_gate_info: bool = False):
+    def forward(self, x: torch.Tensor, return_gate: bool = False):
         # x: [B, L]
         x = self.embedding(x) * math.sqrt(self.embedding_dim)  # [B, L, D]
         x = self.pos_encoder(x.transpose(0, 1)).transpose(0, 1)  # [B, L, D]
@@ -180,7 +180,7 @@ class LightweightTransformerMoE(nn.Module):
         x = self.dropout(F.relu(self.fc1(x)))
         x = self.dropout(self.fc2(x))
 
-        if return_gate_info:
+        if return_gate:
             gate_info = {
                 'gate_weights': all_gate_weights,  # 每层[B*L, num_experts]
                 'expert_usage': torch.stack([gw.mean(dim=0) for gw in all_gate_weights])
@@ -214,7 +214,7 @@ if __name__ == "__main__":
     model.train()
 
     # 训练模式
-    logits, info = model(x, return_gate_info=True)
+    logits, info = model(x, return_gate=True)
     loss = model.compute_loss(logits, y, info)
     print(f"训练 - logits: {logits.shape}, loss: {loss.item():.4f}")
     print(f"专家使用率: {info['expert_usage'].mean(dim=1).tolist()}")
